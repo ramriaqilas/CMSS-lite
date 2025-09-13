@@ -1,0 +1,6 @@
+python-telegram-bot>=21.6
+gspread>=6.0.0
+google-auth>=2.35.0
+pytz>=2024.2
+Pillow>=10.4.0
+pyzbar>=0.1.9
