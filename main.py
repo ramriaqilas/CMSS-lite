@@ -1,4 +1,4 @@
-# tele_mutasi_bot.py
+# CMMS - Lite.py
 # Telegram bot to log spare-part transactions into Google Sheets (TransaksiGudang).
 #
 # Features:
