@@ -1,4 +1,4 @@
-# Telegram Mutasi Sparepart Bot
+# CMMS - Lite
 
 ## Perintah
 - `/mutasi` — catat mutasi IN/OUT ke sheet `TransaksiGudang`  
