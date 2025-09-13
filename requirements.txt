@@ -4,3 +4,5 @@ google-auth>=2.35.0
 pytz>=2024.2
 Pillow>=10.4.0
 pyzbar>=0.1.9
+dotenv~=0.9.9
+python-dotenv~=1.0.1
