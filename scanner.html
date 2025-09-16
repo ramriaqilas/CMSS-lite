@@ -1,82 +1,156 @@
 <!doctype html>
 <html lang="id">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
-  <title>Scan</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>Scanner</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <!-- Pin versi agar pasti termuat -->
+  <script defer src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.4"></script>
+  <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     html,body{height:100%;margin:0;background:#000;color:#fff;font-family:system-ui,Arial}
     #wrap{display:flex;flex-direction:column;height:100%}
     #video{width:100%;height:auto;flex:1;background:#000;object-fit:cover}
     #bar{padding:10px;background:rgba(0,0,0,.6);display:flex;gap:8px;align-items:center}
-    #status{flex:1;opacity:.85;font-size:14px}
+    #status{flex:1;opacity:.9;font-size:14px;white-space:pre-line}
     button{padding:10px 14px;border-radius:10px;border:0;background:#2ea043;color:#fff;font-weight:700}
+    button:disabled{opacity:.5}
   </style>
 </head>
 <body>
 <div id="wrap">
-  <video id="video" playsinline></video>
+  <video id="video" autoplay muted playsinline></video>
   <div id="bar">
-    <div id="status">Arahkan kamera ke QR / barcode…</div>
+    <div id="status">Memulai kamera…</div>
     <button id="flip">Flip</button>
     <button id="close">Tutup</button>
   </div>
 </div>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="https://unpkg.com/@zxing/browser@latest"></script>
 <script>
-(async function(){
-  const tg = window.Telegram?.WebApp; tg?.expand(); tg?.ready();
-  const video = document.getElementById('video');
+(async () => {
+  const tg = window.Telegram?.WebApp; try{tg?.expand(); tg?.ready();}catch(e){}
   const status = document.getElementById('status');
-  const flipBtn = document.getElementById('flip');
-  const closeBtn= document.getElementById('close');
+  const video  = document.getElementById('video');
+  const flipBtn= document.getElementById('flip');
+  const closeBtn=document.getElementById('close');
 
-  const reader = new ZXingBrowser.BrowserMultiFormatReader();
-  // (opsional) batasi format agar stabil & cepat
-  // const formats = [
-  //   ZXingBrowser.BarcodeFormat.QR_CODE,
-  //   ZXingBrowser.BarcodeFormat.CODE_128,
-  //   ZXingBrowser.BarcodeFormat.CODE_39,
-  //   ZXingBrowser.BarcodeFormat.EAN_13,
-  //   ZXingBrowser.BarcodeFormat.EAN_8,
-  //   ZXingBrowser.BarcodeFormat.UPC_A,
-  //   ZXingBrowser.BarcodeFormat.UPC_E,
-  // ];
-  // reader.defaultOptions = { hints: new ZXingBrowser.Hints().set(ZXingBrowser.DecodeHintType.POSSIBLE_FORMATS, formats) };
-  reader.defaultOptions = { delayBetweenScanAttempts: 120, delayBetweenScanSuccess: 800, maxScansPerSecond: 8 };
+  const show = (m)=>status.textContent=String(m);
+  const add  = (m)=>status.textContent+='\n'+String(m);
+  const sendDbg=(o)=>{ try{ tg?.sendData?.(JSON.stringify({__debug:true,...o})); }catch(_){} };
 
-  let devices = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
-  if (!devices.length) { status.textContent = 'Kamera tidak ditemukan/izin ditolak'; return; }
+  // Tunggu ZXing siap
+  await new Promise(r => { if (window.ZXingBrowser) r(); else window.addEventListener('load', r, {once:true}); });
 
-  let idx = 0;
-  function pickBack(list){ return list.find(d => /back|rear|tr(á|a)s|arrière/i.test(d.label))?.deviceId || list[0].deviceId; }
-  let deviceId = pickBack(devices);
-
-  async function start(){
-    status.textContent = 'Memulai kamera…';
-    await reader.decodeFromVideoDevice(deviceId, video, (result, err, controls) => {
-      if (result) {
-        const text = (result.getText ? result.getText() : result.text || '').trim();
-        if (text) {
-          status.textContent = 'Terdeteksi: ' + text;
-          try { tg?.sendData(text); } catch(e) {}
-          try { controls?.stop(); } catch(e) {}
-          setTimeout(() => { try{ tg?.close(); }catch(e){} }, 200);
-        }
-      }
-      if (err && !(err instanceof ZXingBrowser.NotFoundException)) { console.warn(err); }
+  // 1) PREFLIGHT: minta izin + jalankan stream supaya yakin kamera OK
+  let preflightStream;
+  try{
+    preflightStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" }, width:{ideal:1280}, height:{ideal:720} },
+      audio: false
     });
+    video.srcObject = preflightStream;
+    await video.play();
+    show("Kamera aktif…");
+  }catch(e){
+    show("Gagal mulai kamera: "+(e.name||e));
+    add("Pastikan HTTPS & izin kamera ON untuk app ini.");
+    sendDbg({start_error:e.name||String(e), msg:e.message||""});
+    return; // keluar, tidak lanjut ZXing
   }
-  await start();
 
+  // 2) Siapkan ZXing
+  const reader = new ZXingBrowser.BrowserMultiFormatReader();
+  const hints = new ZXingBrowser.Hints();
+  hints.set(ZXingBrowser.DecodeHintType.POSSIBLE_FORMATS, [
+    ZXingBrowser.BarcodeFormat.QR_CODE,
+    ZXingBrowser.BarcodeFormat.CODE_128,
+  ]);
+  reader.defaultOptions = { hints, delayBetweenScanAttempts: 100, delayBetweenScanSuccess: 600, maxScansPerSecond: 8 };
+  const LSKEY="scanner.lastDeviceId";
+
+  // Ambil deviceId yang valid (setelah izin, label/device muncul)
+  let deviceId = localStorage.getItem(LSKEY);
+  if (!deviceId) {
+    try{
+      const devs = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
+      const back = devs.find(d=>/back|rear|tr(á|a)s|arrière/i.test(d.label));
+      deviceId = (back||devs[0])?.deviceId;
+      if (deviceId) localStorage.setItem(LSKEY, deviceId);
+    }catch(e){
+      // kalau gagal, tetap lanjut pakai constraints
+    }
+  }
+
+  // Matikan preflight stream (ZXing akan buka stream sendiri)
+  try{ preflightStream.getTracks().forEach(t=>t.stop()); }catch(_){}
+
+  async function startZXing(useDevice){
+    show("Memulai pemindaian…");
+    const constraints = useDevice
+      ? { video: { deviceId: { exact: useDevice }, width:{ideal:1280}, height:{ideal:720} } }
+      : { video: { facingMode: { ideal: "environment" }, width:{ideal:1280}, height:{ideal:720} } };
+
+    try{
+      await reader.decodeFromConstraints(constraints, video, (result, err, controls) => {
+        if (result) {
+          const text = (result.getText ? result.getText() : result.text || '').trim();
+          if (text) {
+            show("Terdeteksi: " + text);
+            try{ tg?.HapticFeedback?.impactOccurred?.('light'); }catch(_){}
+            try{ tg?.sendData?.(JSON.stringify({ code: text })); }catch(_){}
+            try{ controls?.stop(); }catch(_){}
+            setTimeout(()=>{ try{ tg?.close(); }catch(_){ window.close(); } }, 200);
+          }
+        }
+        if (err && !(err instanceof ZXingBrowser.NotFoundException)) {
+          add("Err: "+(err.name||err));
+          sendDbg({zxing_err:err.name||String(err)});
+        }
+      });
+    }catch(e){
+      // Fallback: turunkan resolusi atau ganti mode
+      add("Fallback… "+(e.name||e));
+      sendDbg({start_fail:e.name||String(e)});
+      try{
+        await reader.decodeFromConstraints(
+          { video: { facingMode: { ideal:"environment" }, width:{ideal:640}, height:{ideal:480} } },
+          video, (r,err,c)=>{ if(r){ const t=r.getText?r.getText():r.text||''; if(t){ try{c?.stop();}catch(_){}
+            try{tg?.sendData?.(JSON.stringify({code:t.trim()}));}catch(_){}
+            setTimeout(()=>{ try{tg?.close();}catch(_){window.close();}},200); } }
+            if (err && !(err instanceof ZXingBrowser.NotFoundException)) add("Err2: "+(err.name||err));
+          }
+        );
+      }catch(e2){
+        add("Gagal start pemindaian: "+(e2.name||e2));
+        sendDbg({fallback_fail:e2.name||String(e2)});
+      }
+    }
+  }
+
+  await startZXing(deviceId);
+
+  // Tombol flip
   flipBtn.onclick = async () => {
-    idx = (idx + 1) % devices.length;
-    deviceId = devices[idx].deviceId;
-    try { await reader.reset(); await start(); } catch(e){ console.error(e); }
+    flipBtn.disabled = true;
+    try{
+      const list = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
+      if (!list?.length) { add("Tidak ada kamera lain."); return; }
+      const cur = localStorage.getItem(LSKEY);
+      const idx = Math.max(0, list.findIndex(d=>d.deviceId===cur));
+      const next = list[(idx+1)%list.length];
+      localStorage.setItem(LSKEY, next.deviceId);
+      await reader.reset();
+      await startZXing(next.deviceId);
+    }catch(e){ add("Flip error: "+(e.name||e)); }
+    finally{ flipBtn.disabled=false; }
   };
-  closeBtn.onclick = () => { try{ tg?.close(); }catch(e){ window.close(); } };
-  document.addEventListener('visibilitychange', () => { if (document.hidden) { try { reader.reset(); } catch(e){} }});
+
+  // Tutup
+  closeBtn.onclick = () => { try{ tg?.close(); }catch(_){ window.close(); } };
+
+  // Bereskan saat disembunyikan
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { try{reader.reset();}catch(_){}} });
 })();
 </script>
 </body>
