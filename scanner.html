@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+  <title>Scan</title>
+  <style>
+    html,body{height:100%;margin:0;background:#000;color:#fff;font-family:system-ui,Arial}
+    #wrap{display:flex;flex-direction:column;height:100%}
+    #video{width:100%;height:auto;flex:1;background:#000;object-fit:cover}
+    #bar{padding:10px;background:rgba(0,0,0,.6);display:flex;gap:8px;align-items:center}
+    #status{flex:1;opacity:.85;font-size:14px}
+    button{padding:10px 14px;border-radius:10px;border:0;background:#2ea043;color:#fff;font-weight:700}
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <video id="video" playsinline></video>
+  <div id="bar">
+    <div id="status">Arahkan kamera ke QR / barcode…</div>
+    <button id="flip">Flip</button>
+    <button id="close">Tutup</button>
+  </div>
+</div>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://unpkg.com/@zxing/browser@latest"></script>
+<script>
+(async function(){
+  const tg = window.Telegram?.WebApp; tg?.expand(); tg?.ready();
+  const video = document.getElementById('video');
+  const status = document.getElementById('status');
+  const flipBtn = document.getElementById('flip');
+  const closeBtn= document.getElementById('close');
+
+  const reader = new ZXingBrowser.BrowserMultiFormatReader();
+  // (opsional) batasi format agar stabil & cepat
+  // const formats = [
+  //   ZXingBrowser.BarcodeFormat.QR_CODE,
+  //   ZXingBrowser.BarcodeFormat.CODE_128,
+  //   ZXingBrowser.BarcodeFormat.CODE_39,
+  //   ZXingBrowser.BarcodeFormat.EAN_13,
+  //   ZXingBrowser.BarcodeFormat.EAN_8,
+  //   ZXingBrowser.BarcodeFormat.UPC_A,
+  //   ZXingBrowser.BarcodeFormat.UPC_E,
+  // ];
+  // reader.defaultOptions = { hints: new ZXingBrowser.Hints().set(ZXingBrowser.DecodeHintType.POSSIBLE_FORMATS, formats) };
+  reader.defaultOptions = { delayBetweenScanAttempts: 120, delayBetweenScanSuccess: 800, maxScansPerSecond: 8 };
+
+  let devices = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
+  if (!devices.length) { status.textContent = 'Kamera tidak ditemukan/izin ditolak'; return; }
+
+  let idx = 0;
+  function pickBack(list){ return list.find(d => /back|rear|tr(á|a)s|arrière/i.test(d.label))?.deviceId || list[0].deviceId; }
+  let deviceId = pickBack(devices);
+
+  async function start(){
+    status.textContent = 'Memulai kamera…';
+    await reader.decodeFromVideoDevice(deviceId, video, (result, err, controls) => {
+      if (result) {
+        const text = (result.getText ? result.getText() : result.text || '').trim();
+        if (text) {
+          status.textContent = 'Terdeteksi: ' + text;
+          try { tg?.sendData(text); } catch(e) {}
+          try { controls?.stop(); } catch(e) {}
+          setTimeout(() => { try{ tg?.close(); }catch(e){} }, 200);
+        }
+      }
+      if (err && !(err instanceof ZXingBrowser.NotFoundException)) { console.warn(err); }
+    });
+  }
+  await start();
+
+  flipBtn.onclick = async () => {
+    idx = (idx + 1) % devices.length;
+    deviceId = devices[idx].deviceId;
+    try { await reader.reset(); await start(); } catch(e){ console.error(e); }
+  };
+  closeBtn.onclick = () => { try{ tg?.close(); }catch(e){ window.close(); } };
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { try { reader.reset(); } catch(e){} }});
+})();
+</script>
+</body>
+</html>
